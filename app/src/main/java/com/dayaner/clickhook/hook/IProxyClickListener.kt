@@ -18,15 +18,17 @@ interface IProxyClickListener {
     fun onProxyClick(wrap: WrapClickListener, v: View): Boolean
 
     class WrapClickListener(
-        private val mBaseListener: View.OnClickListener,
-        private val mProxyListener: IProxyClickListener
+        private val mBaseOnClickListener: View.OnClickListener,
+        private val mProxyOnClickListener: IProxyClickListener
     ) : View.OnClickListener {
 
         override fun onClick(v: View?) {
             v?.let { view ->
-                val handled: Boolean = mProxyListener.onProxyClick(this, view)
+                //代理点击事件，返回是否要往下传递
+                val handled: Boolean = mProxyOnClickListener.onProxyClick(this, view)
                 if (handled) {
-                    mBaseListener.onClick(view)
+                    //本身的onClick事件
+                    mBaseOnClickListener.onClick(view)
                 }
             }
         }
