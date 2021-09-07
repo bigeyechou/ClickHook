@@ -1,7 +1,6 @@
 package com.dayaner.clickhook.hook
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AbsListView
@@ -36,16 +35,22 @@ class HookOnClickHelper {
     var mProxyListener: IProxyClickListener? = null
 
     /**
+     * 防止重复设置
+     */
+    var mPrivateTagKey = System.identityHashCode(this)
+
+    /**
      * 注册点击事件的hook
      * Activity : 根据Activity来获取页面的根View
      * IProxyClickListener : 代理点击事件
      */
-    fun registerClickHook(rootView : View, proxyListener: IProxyClickListener) {
+    fun registerClickHook(rootView: View, proxyListener: IProxyClickListener) {
         mProxyListener = proxyListener
         //初始化hook
         initHooks()
+        mPrivateTagKey = mPrivateTagKey or (0xFFFF shl 24)
         rootView.viewTreeObserver.addOnGlobalLayoutListener {
-            hookViews(rootView)
+            hookViews(rootView, 0)
         }
     }
 
@@ -78,25 +83,32 @@ class HookOnClickHelper {
     }
 
     /**
-     * ViewGroup深度
+     * hook view ，recycledContainerDeep ：记录列表容器的深度
      */
-    private fun hookViews(view: View) {
+    private fun hookViews(view: View, recycledContainerDeep: Int) {
         if (view.visibility == View.VISIBLE) {
-            //如果属于ViewGroup，则
+            var recycledContainerDeep = recycledContainerDeep
+            val forceHook: Boolean = recycledContainerDeep == 1
             if (view is ViewGroup) {
+                val existAncestorRecycle: Boolean = recycledContainerDeep > 0
                 val viewGroup: ViewGroup = view
-                //不属于ListView 或者 深度大于0，继续往下走
-                if (!(viewGroup is AbsListView || viewGroup is RecyclerView)) {
-                    hookClickListener(view)
+                //不属于ListView 或者 是ListView深度大于0，继续往下走
+                if (!(viewGroup is AbsListView || viewGroup is RecyclerView) || existAncestorRecycle) {
+                    hookClickListener(view, recycledContainerDeep, forceHook)
+                    if (existAncestorRecycle) {
+                        recycledContainerDeep++
+                    }
+                } else {
+                    recycledContainerDeep = 1
                 }
                 //ViewGroup遍历子view
                 val childCount = viewGroup.childCount
                 repeat((0..childCount).count() - 1) {
                     val childView = viewGroup.getChildAt(it)
-                    hookViews(childView)
+                    hookViews(childView, recycledContainerDeep)
                 }
             } else {
-                hookClickListener(view)
+                hookClickListener(view, recycledContainerDeep, forceHook)
             }
         }
     }
@@ -105,28 +117,41 @@ class HookOnClickHelper {
      * 给HookView设置Click监听
      * 设置自定义Click事件
      */
-    private fun hookClickListener(view: View) {
-        try {
-            sHookMethod?.let { method ->
-                val getListenerInfo: Any = method.invoke(view)
-                sHookField?.let { field ->
-                    //通过field获取getListenerInfo 的 OnClickListener 事件
-                    val baseClickListener = field.get(getListenerInfo) as View.OnClickListener
-                    //重新设置field中getListenerInfo的IProxyClickListener
-                    mProxyListener?.let { proxyListener ->
-                        if (baseClickListener !is IProxyClickListener.WrapClickListener) {
-                            field[getListenerInfo] =
-                                IProxyClickListener.WrapClickListener(
-                                    baseClickListener,
-                                    proxyListener
-                                )
+    private fun hookClickListener(view: View, recycledContainerDeep: Int, forceHook: Boolean) {
+        //判断是否需要hook
+        var needHook = forceHook
+        if (!needHook) {
+            needHook = view.isClickable
+            //如果可点击且深度为0，则根据tag来判断是否已经hook过
+            if (needHook && recycledContainerDeep == 0) {
+                needHook = view.getTag(mPrivateTagKey) == null
+            }
+        }
+
+        if (needHook) {
+            try {
+                sHookMethod?.let { method ->
+                    val getListenerInfo: Any = method.invoke(view)
+                    sHookField?.let { field ->
+                        //通过field获取getListenerInfo 的 OnClickListener 事件
+                        val baseClickListener = field.get(getListenerInfo) as View.OnClickListener
+                        //重新设置field中getListenerInfo的IProxyClickListener
+                        mProxyListener?.let { proxyListener ->
+                            if (baseClickListener !is IProxyClickListener.WrapClickListener) {
+                                field[getListenerInfo] =
+                                    IProxyClickListener.WrapClickListener(
+                                        baseClickListener,
+                                        proxyListener
+                                    )
+                                view.setTag(mPrivateTagKey, recycledContainerDeep)
+                            }
                         }
                     }
                 }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+            } catch (e: Exception) {
+                e.printStackTrace()
 
+            }
         }
     }
 
